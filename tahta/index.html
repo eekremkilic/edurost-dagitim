@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<!-- Bu sayfa hiçbir yere bağlanmaz: kod telefonun içinde hesaplanır, hiçbir veri gönderilmez (connect-src 'none'). -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; img-src data:; base-uri 'none'; form-action 'none'">
+<title>Tahtayı Aç</title>
+<style>
+:root{--zemin:#0a1222;--kart:#111c31;--kenar:#22314d;--yazi:#e6edf7;--soluk:#8fa3c0;--amber:#fbbf24;--yesil:#34d399;--ana:#0e7490}
+*{box-sizing:border-box}
+body{margin:0;background:var(--zemin);color:var(--yazi);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif}
+header{padding:22px 16px 8px;text-align:center}
+header small{display:block;color:var(--soluk);font-size:13px}
+header h1{margin:4px 0 0;font-size:24px;color:var(--amber)}
+main{max-width:520px;margin:0 auto;padding:8px 16px 28px}
+.kart{background:var(--kart);border:1px solid var(--kenar);border-radius:16px;padding:18px;margin-bottom:14px}
+h2{margin:0 0 8px;font-size:18px}
+p{margin:0 0 10px}
+.soluk{color:var(--soluk);font-size:14px}
+.hata{background:#3b1219;color:#fecaca;border:1px solid #7f1d1d;border-radius:12px;padding:12px;margin-bottom:14px;font-weight:600}
+input{width:100%;padding:14px;font-size:22px;letter-spacing:3px;text-align:center;text-transform:uppercase;border:1px solid var(--kenar);border-radius:12px;background:#0d1830;color:#fff}
+button{display:block;width:100%;margin-top:14px;padding:15px;font-size:18px;font-weight:700;border:0;border-radius:12px;background:var(--ana);color:#fff;cursor:pointer}
+button.ikincil{background:transparent;color:var(--soluk);border:1px solid var(--kenar);font-size:15px;padding:10px;font-weight:600}
+button:disabled{opacity:.6}
+.kod{font:800 56px/1.1 ui-monospace,Consolas,monospace;letter-spacing:6px;text-align:center;color:#fff;background:#0d1830;border:2px solid var(--yesil);border-radius:16px;padding:18px 6px;margin:8px 0 12px}
+.ortala{text-align:center}
+footer{text-align:center;color:var(--soluk);font-size:12px;padding:0 16px 24px}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<header><small>EduRost Akıllı Tahta</small><h1 id="baslik">Tahtayı Aç</h1></header>
+<main>
+  <div id="hata" class="hata" hidden></div>
+  <section id="yok" class="kart" hidden>
+    <h2>Önce karekodu okutun</h2>
+    <p class="soluk">Tahtadaki karekodu telefonunuzun kamerasıyla okutun; bu sayfa açılınca tahtaya yazacağınız kod burada çıkar.</p>
+  </section>
+  <form id="giris" class="kart" autocomplete="off" hidden>
+    <h2>Öğretmen girişi</h2>
+    <p class="soluk">Okul yönetiminin size verdiği giriş kodunu yazın. Bir kez yazmanız yeter; bu telefon hatırlar.</p>
+    <input id="kod" type="text" autocapitalize="characters" spellcheck="false" maxlength="12" placeholder="XXXX-XXXX" required>
+    <button id="girisDugme" type="submit">Giriş</button>
+  </form>
+  <section id="goster" hidden>
+    <div class="kart ortala">
+      <h2>Tahtayı açma kodu</h2>
+      <div id="sonuc" class="kod">––– –––</div>
+      <p class="soluk">Kodu tahtadaki tuş takımına yazın. Kod bu karekoda özeldir; karekod yenilenirse yeniden okutun.</p>
+      <p id="kontrol" class="soluk" hidden></p>
+    </div>
+    <button id="cikis" class="ikincil" type="button">Bu telefondan çıkış yap</button>
+  </section>
+</main>
+<footer>Kod yalnızca bu telefonda hesaplanır. İnternet ya da okul ağı gerekmez; hiçbir veri gönderilmez.</footer>
+<script>
+"use strict";
+// Formüller tahta/ortak.py ile BİREBİR aynıdır (ogretmen_anahtari / ogretmen_kodu / ogretmen_kontrol); biri değişirse
+// ikisi birlikte değişmeli. Anahtar: PBKDF2-HMAC-SHA256(giriş kodu, "edurost-tahta|<okul>", 100000 tur).
+const TUR = 100000;
+const enc = new TextEncoder();
+const $ = id => document.getElementById(id);
+const hex = b => Array.from(new Uint8Array(b), x => x.toString(16).padStart(2, "0")).join("");
+const bayt = h => new Uint8Array(h.match(/../g).map(x => parseInt(x, 16)));
+const duzelt = m => String(m || "").toUpperCase().replace(/İ/g, "I").replace(/[^A-Z0-9]/g, "");
+
+async function anahtarTuret(okul, kod) {
+  const km = await crypto.subtle.importKey("raw", enc.encode(kod), "PBKDF2", false, ["deriveBits"]);
+  return hex(await crypto.subtle.deriveBits(
+    {name: "PBKDF2", salt: enc.encode("edurost-tahta|" + okul), iterations: TUR, hash: "SHA-256"}, km, 256));
+}
+async function hmac(anahtarHex, metin) {
+  const k = await crypto.subtle.importKey("raw", bayt(anahtarHex), {name: "HMAC", hash: "SHA-256"}, false, ["sign"]);
+  return new Uint8Array(await crypto.subtle.sign("HMAC", k, enc.encode(metin)));
+}
+const kes = (o, mod) => (((o[0] << 24) | (o[1] << 16) | (o[2] << 8) | o[3]) & 0x7fffffff) % mod;
+const kodUret = async (a, tahta, sorgu) => String(kes(await hmac(a, "ogr|" + tahta + "|" + sorgu), 1000000)).padStart(6, "0");
+const kontrolUret = async a => String(kes(await hmac(a, "kontrol"), 1000)).padStart(3, "0");
+
+// telefonda saklanan anahtar (yalnız bu tarayıcıda; kod değil, ondan türetilen anahtar)
+let bellek = {};
+const sakla = {
+  oku: o => { try { return localStorage.getItem("edt_" + o) || bellek[o] || ""; } catch (e) { return bellek[o] || ""; } },
+  yaz: (o, v) => { bellek[o] = v; try { localStorage.setItem("edt_" + o, v); } catch (e) {} },
+  sil: o => { delete bellek[o]; try { localStorage.removeItem("edt_" + o); } catch (e) {} }
+};
+
+function bolum(ad) {
+  for (const id of ["yok", "giris", "goster"]) $(id).hidden = id !== ad;
+}
+function hataYaz(m) { $("hata").textContent = m || ""; $("hata").hidden = !m; }
+function karekod() {
+  const m = /^#?(\d{3,10})-([A-Z0-9]{4,12})-(\d{8})$/.exec(decodeURIComponent(location.hash || ""));
+  return m ? {okul: m[1], tahta: m[2], sorgu: m[3]} : null;
+}
+
+async function goster(yeni) {
+  hataYaz("");
+  const k = karekod();
+  if (!k) { bolum("yok"); return; }
+  if (!(window.crypto && crypto.subtle)) {
+    hataYaz("Bu sayfa güvenli bağlantı (https) üzerinden açılmalı. Karekodu yeniden okutun.");
+    bolum("yok"); return;
+  }
+  const a = sakla.oku(k.okul);
+  if (!a) { bolum("giris"); return; }
+  const kod = await kodUret(a, k.tahta, k.sorgu);
+  $("sonuc").textContent = kod.slice(0, 3) + " " + kod.slice(3);
+  const kontrol = $("kontrol");
+  kontrol.textContent = "Kontrol sayısı: " + await kontrolUret(a) + " (kod kâğıdınızdaki ile aynı olmalı)";
+  kontrol.hidden = !yeni;
+  bolum("goster");
+}
+
+$("giris").addEventListener("submit", async e => {
+  e.preventDefault();
+  const k = karekod(), kod = duzelt($("kod").value);
+  if (!k) return;
+  if (kod.length < 6) { hataYaz("Giriş kodu eksik görünüyor."); return; }
+  const d = $("girisDugme");
+  d.disabled = true; d.textContent = "Hesaplanıyor…";
+  try {
+    sakla.yaz(k.okul, await anahtarTuret(k.okul, kod));
+    $("kod").value = "";
+    await goster(true);
+  } catch (err) {
+    hataYaz("Giriş yapılamadı: bu tarayıcı gerekli şifreleme özelliğini desteklemiyor.");
+  }
+  d.disabled = false; d.textContent = "Giriş";
+});
+$("cikis").addEventListener("click", () => {
+  const k = karekod();
+  if (k) sakla.sil(k.okul);
+  goster(false);
+});
+window.addEventListener("hashchange", () => goster(false));
+goster(false);
+</script>
+</body>
+</html>
