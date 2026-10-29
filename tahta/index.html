@@ -35,9 +35,18 @@ footer{text-align:center;color:var(--soluk);font-size:12px;padding:0 16px 24px}
 <header><small>EduRost Akıllı Tahta</small><h1 id="baslik">Tahtayı Aç</h1></header>
 <main>
   <div id="hata" class="hata" hidden></div>
+  <section id="hazir" class="kart ortala" hidden>
+    <h2>Bu telefon hazır</h2>
+    <p class="soluk">Artık tahtadaki karekodu okutmanız yeter; tahtaya yazacağınız kod burada çıkar.</p>
+  </section>
   <section id="yok" class="kart" hidden>
     <h2>Önce karekodu okutun</h2>
     <p class="soluk">Tahtadaki karekodu telefonunuzun kamerasıyla okutun; bu sayfa açılınca tahtaya yazacağınız kod burada çıkar.</p>
+  </section>
+  <section id="baglantisiz" class="kart" hidden>
+    <h2>Öğretmen bağlantısı gerekli</h2>
+    <p class="soluk">Bu telefon henüz tanıtılmamış. Okul yönetiminin öğretmenlere gönderdiği bağlantıyı bir kez açın (ya da öğretmenler odasındaki karekodu okutun); sonra tahtadaki karekodu yeniden okutun.</p>
+    <button id="kodumVar" class="ikincil" type="button">Bana özel giriş kodum var</button>
   </section>
   <form id="giris" class="kart" autocomplete="off" hidden>
     <h2>Öğretmen girişi</h2>
@@ -59,7 +68,9 @@ footer{text-align:center;color:var(--soluk);font-size:12px;padding:0 16px 24px}
 <script>
 "use strict";
 // Formüller tahta/ortak.py ile BİREBİR aynıdır (ogretmen_anahtari / ogretmen_kodu / ogretmen_kontrol); biri değişirse
-// ikisi birlikte değişmeli. Anahtar: PBKDF2-HMAC-SHA256(giriş kodu, "edurost-tahta|<okul>", 100000 tur).
+// ikisi birlikte değişmeli. Anahtar iki yoldan gelir: (1) okulun ÖĞRETMEN BAĞLANTISI «#k=<okul>-<base32 anahtar>» —
+// bir kez açılınca saklanır, adres çubuğundan silinir; (2) isteğe bağlı öğretmene özel giriş kodu:
+// PBKDF2-HMAC-SHA256(giriş kodu, "edurost-tahta|<okul>", 100000 tur).
 const TUR = 100000;
 const enc = new TextEncoder();
 const $ = id => document.getElementById(id);
@@ -89,7 +100,24 @@ const sakla = {
 };
 
 function bolum(ad) {
-  for (const id of ["yok", "giris", "goster"]) $(id).hidden = id !== ad;
+  for (const id of ["hazir", "yok", "baglantisiz", "giris", "goster"]) $(id).hidden = id !== ad;
+}
+function base32(m) {
+  const abc = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567", cikti = [];
+  let bit = 0, deger = 0;
+  for (const c of String(m || "").toUpperCase().replace(/=+$/, "")) {
+    const i = abc.indexOf(c);
+    if (i < 0) return null;
+    deger = (deger << 5) | i; bit += 5;
+    if (bit >= 8) { cikti.push((deger >>> (bit - 8)) & 255); bit -= 8; }
+  }
+  return new Uint8Array(cikti);
+}
+function okulBaglantisi() {
+  const m = /^#?k=(\d{3,10})-([A-Z2-7]{16,64})$/i.exec(decodeURIComponent(location.hash || ""));
+  if (!m) return null;
+  const a = base32(m[2]);
+  return a && a.length >= 10 ? {okul: m[1], anahtar: hex(a)} : null;
 }
 function hataYaz(m) { $("hata").textContent = m || ""; $("hata").hidden = !m; }
 function karekod() {
@@ -99,6 +127,12 @@ function karekod() {
 
 async function goster(yeni) {
   hataYaz("");
+  const b = okulBaglantisi();
+  if (b) {                                       // öğretmen bağlantısı: anahtarı sakla, adres çubuğundan sil
+    sakla.yaz(b.okul, b.anahtar);
+    try { history.replaceState(null, "", location.pathname); } catch (e) {}
+    bolum("hazir"); return;
+  }
   const k = karekod();
   if (!k) { bolum("yok"); return; }
   if (!(window.crypto && crypto.subtle)) {
@@ -106,7 +140,7 @@ async function goster(yeni) {
     bolum("yok"); return;
   }
   const a = sakla.oku(k.okul);
-  if (!a) { bolum("giris"); return; }
+  if (!a) { bolum("baglantisiz"); return; }
   const kod = await kodUret(a, k.tahta, k.sorgu);
   $("sonuc").textContent = kod.slice(0, 3) + " " + kod.slice(3);
   const kontrol = $("kontrol");
@@ -131,6 +165,7 @@ $("giris").addEventListener("submit", async e => {
   }
   d.disabled = false; d.textContent = "Giriş";
 });
+$("kodumVar").addEventListener("click", () => { hataYaz(""); bolum("giris"); $("kod").focus(); });
 $("cikis").addEventListener("click", () => {
   const k = karekod();
   if (k) sakla.sil(k.okul);
